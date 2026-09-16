@@ -600,7 +600,7 @@
             <div class="scene" id="scene">
                 <div class="orbit" aria-hidden="true"></div>
                 <div class="orbit orbit-b" aria-hidden="true"></div>
-                <div class="hero-clock" id="clock" aria-label="Ceremonial clock at seven o'clock">
+                <div class="hero-clock" id="clock" aria-label="Live clock in GMT+7">
                     <img class="hero-clock__face" src="assets/clock/clock-face-bg2.png" alt="">
                     <div class="clock-hand clock-hand--hour" data-hour-hand>
                         <img src="assets/clock/hour-hand-new.png" alt="">
@@ -626,10 +626,10 @@
                 </div>
             </div>
             <div class="copy">
-                <p class="time-label">7:00</p>
+                <p class="time-label" id="timeLabel">19:00</p>
                 <h1>The hour has come</h1>
                 <p class="tagline">Understand first. Act second.</p>
-                <p class="hint">Click anywhere to begin</p>
+                <p class="hint" id="hintLabel">Public at 19:00 GMT+7</p>
             </div>
         </section>
 
@@ -649,6 +649,12 @@
         (function () {
             var TOTAL = 30;
             var LEGAL_URL = "https://legalintegrityanalytics.com";
+            var VN_TZ = "Asia/Ho_Chi_Minh";
+            var DEADLINE = Date.parse(
+                new Date().toLocaleString("sv-SE", { timeZone: VN_TZ }).slice(0, 10) + "T19:00:00+07:00"
+            );
+            var timeLabel = document.getElementById("timeLabel");
+            var hintLabel = document.getElementById("hintLabel");
             var CIRCUMFERENCE = 2 * Math.PI * 128;
             var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             var started = false;
@@ -706,19 +712,80 @@
 
             function easeOutQuart(t) { return 1 - Math.pow(1 - t, 4); }
 
+            function pad2(value) {
+                return String(value).padStart(2, "0");
+            }
+
+            function getVnTime() {
+                var now = new Date();
+                var parts = new Intl.DateTimeFormat("en-GB", {
+                    timeZone: VN_TZ,
+                    hour: "numeric",
+                    minute: "numeric",
+                    second: "numeric",
+                    hour12: false,
+                    hourCycle: "h23"
+                }).formatToParts(now);
+                var map = {};
+                parts.forEach(function (part) {
+                    if (part.type !== "literal") map[part.type] = Number(part.value);
+                });
+                var seconds = map.second + now.getMilliseconds() / 1000;
+                var minutes = map.minute + seconds / 60;
+                var hours12 = (map.hour % 12) + minutes / 60;
+                return {
+                    hour: map.hour,
+                    minute: map.minute,
+                    second: seconds,
+                    hourAngle: hours12 * 30,
+                    minuteAngle: minutes * 6,
+                    secondAngle: seconds * 6
+                };
+            }
+
+            function secondsUntilDeadline() {
+                return (DEADLINE - Date.now()) / 1000;
+            }
+
+            function formatRemain(sec) {
+                sec = Math.max(0, Math.ceil(sec));
+                var hours = Math.floor(sec / 3600);
+                var minutes = Math.floor((sec % 3600) / 60);
+                var seconds = sec % 60;
+                if (hours > 0) return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds);
+                return pad2(minutes) + ":" + pad2(seconds);
+            }
+
+            function syncLiveClock() {
+                var vn = getVnTime();
+                hourAngle = vn.hourAngle;
+                minuteAngle = vn.minuteAngle;
+                secondAngle = vn.secondAngle;
+                applyHands();
+                if (timeLabel) timeLabel.textContent = pad2(vn.hour) + ":" + pad2(vn.minute);
+                if (hintLabel && !started) {
+                    var left = secondsUntilDeadline();
+                    hintLabel.textContent = left > 0
+                        ? "Opens in " + formatRemain(left)
+                        : "Public at 19:00 GMT+7";
+                }
+            }
+
             function bootSequence() {
                 var start = performance.now();
                 function spin(now) {
                     var t = Math.min(1, (now - start) / 2400);
                     var e = easeOutQuart(t);
-                    hourAngle = 210 * e;
-                    minuteAngle = 360 * e;
-                    secondAngle = 1080 * e;
+                    var vn = getVnTime();
+                    hourAngle = vn.hourAngle + 720 * (1 - e);
+                    minuteAngle = vn.minuteAngle + 1080 * (1 - e);
+                    secondAngle = vn.secondAngle + 1440 * (1 - e);
                     applyHands();
                     if (t < 1) {
                         requestAnimationFrame(spin);
                     } else {
                         liveSeconds = true;
+                        syncLiveClock();
                     }
                 }
                 window.setTimeout(function () {
@@ -727,23 +794,19 @@
                     ready = true;
                     if (!reduceMotion) requestAnimationFrame(spin);
                     else {
-                        hourAngle = 210;
-                        minuteAngle = 0;
-                        secondAngle = 0;
-                        applyHands();
                         liveSeconds = true;
+                        syncLiveClock();
                     }
                 }, reduceMotion ? 200 : 1100);
             }
 
             function tickHands() {
-                if (liveSeconds && ready && !started) {
-                    var now = new Date();
-                    var sec = now.getSeconds() + now.getMilliseconds() / 1000;
-                    hourAngle = 210 + (sec / 60) * 0.5;
-                    minuteAngle = sec * 0.1;
-                    secondAngle = sec * 6;
-                    applyHands();
+                if (liveSeconds && ready && !started && window.location.hash !== "#fireworks") {
+                    syncLiveClock();
+                    var left = secondsUntilDeadline();
+                    if (left <= TOTAL) {
+                        startCountdown();
+                    }
                 }
                 requestAnimationFrame(tickHands);
             }
@@ -1180,10 +1243,16 @@
                     document.body.classList.remove("is-booting");
                     document.body.classList.add("is-ready");
                     ready = true;
-                    hourAngle = 210;
-                    minuteAngle = 0;
-                    applyHands();
                 }
+
+                var leftNow = secondsUntilDeadline();
+                if (leftNow <= 0) {
+                    started = true;
+                    liveSeconds = false;
+                    finish();
+                    return;
+                }
+
                 started = true;
                 liveSeconds = false;
                 startBtn.disabled = true;
@@ -1197,16 +1266,15 @@
                 burst(48);
                 flashEl.classList.add("is-on");
                 document.body.classList.add("is-counting");
-                setCount(TOTAL);
 
-                var start = performance.now();
-                var shown = TOTAL;
+                var shown = Math.max(1, Math.ceil(Math.min(TOTAL, leftNow)));
+                setCount(shown);
 
-                function frame(now) {
-                    var elapsed = (now - start) / 1000;
-                    var left = Math.max(0, TOTAL - elapsed);
-                    progressEl.style.strokeDashoffset = String(((TOTAL - left) / TOTAL) * CIRCUMFERENCE);
-                    comet.style.setProperty("--comet", ((elapsed / TOTAL) * 360) + "deg");
+                function frame() {
+                    var left = Math.max(0, secondsUntilDeadline());
+                    var used = Math.min(TOTAL, Math.max(0, TOTAL - left));
+                    progressEl.style.strokeDashoffset = String((used / TOTAL) * CIRCUMFERENCE);
+                    comet.style.setProperty("--comet", ((used / TOTAL) * 360) + "deg");
 
                     var secondsLeft = Math.max(0, Math.ceil(left));
                     if (secondsLeft !== shown) {
@@ -1264,7 +1332,13 @@
                 document.documentElement.style.setProperty("--tilt-y", y + "deg");
             });
 
-            startBtn.addEventListener("click", startCountdown);
+            function unlockAudio() {
+                ensureAudio();
+                if (audioCtx && audioCtx.resume) audioCtx.resume();
+            }
+
+            startBtn.addEventListener("click", unlockAudio);
+            window.addEventListener("pointerdown", unlockAudio, { once: true });
         })();
     </script>
 </body>
